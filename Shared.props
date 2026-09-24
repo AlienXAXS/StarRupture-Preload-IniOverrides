@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <!-- ============================================================
+       MODLOADER_CLIENT_BUILD / MODLOADER_SERVER_BUILD
+
+       Injected into PreprocessorDefinitions for all ClCompile items
+       so source files can use:
+         #if defined(MODLOADER_CLIENT_BUILD)   ...client-only code...
+         #elif defined(MODLOADER_SERVER_BUILD) ...server-only code...
+         #endif
+
+       A preload plugin targets exactly one executable: the client
+       and the dedicated server have different code at different
+       addresses, and PreloadInfo::target has to say which. There is
+       deliberately no generic configuration here.
+       ============================================================ -->
+  <ItemDefinitionGroup Condition="'$(Configuration)' == 'Client Debug' Or '$(Configuration)' == 'Client Release'">
+    <ClCompile>
+      <PreprocessorDefinitions>MODLOADER_CLIENT_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)' == 'Server Debug' Or '$(Configuration)' == 'Server Release'">
+    <ClCompile>
+      <PreprocessorDefinitions>MODLOADER_SERVER_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <!-- ============================================================
+       MODLOADER_BUILD_TAG
+       Injected by CI via /p:ModLoaderBuildTag="...". Dev and local
+       builds get no define, so fall back to "dev" in plugin code.
+       ============================================================ -->
+  <ItemDefinitionGroup Condition="'$(ModLoaderBuildTag)' != ''">
+    <ClCompile>
+      <PreprocessorDefinitions>MODLOADER_BUILD_TAG="$(ModLoaderBuildTag)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+</Project>
