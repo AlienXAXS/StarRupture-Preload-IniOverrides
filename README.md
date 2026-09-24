@@ -12,10 +12,16 @@ to go back to stock behaviour.
 Requires the [StarRupture ModLoader](https://github.com/AlienXAXS/StarRupture-ModLoader) with
 preload plugin support.
 
-| Build | Drop `IniOverrides.dll` into |
+Grab `IniOverrides-Client-<version>.zip` or `IniOverrides-Server-<version>.zip` from
+[Releases](https://github.com/AlienXAXS/StarRupture-Preload-IniOverrides/releases/latest) and
+extract it into `Binaries\Win64\ModLoader\` -- it contains `Preload\IniOverrides-<Client|Server>.dll`.
+
+| Build | DLL goes in |
 |---|---|
-| `Client Release` | `<game>\StarRupture\Binaries\Win64\ModLoader\Preload\` |
-| `Server Release` | `<server>\StarRupture\Binaries\Win64\ModLoader\Preload\` |
+| Client | `<game>\StarRupture\Binaries\Win64\ModLoader\Preload\` |
+| Server | `<server>\StarRupture\Binaries\Win64\ModLoader\Preload\` |
+
+The file name does not matter to the loader, but keep only one copy in the folder.
 
 ## Where your INI files go
 
@@ -86,6 +92,10 @@ wildcard is the `NoSave` field offset, which differs between the two (`0x4A0` / 
 
 Open `IniOverrides.sln` and build `Client Release` or `Server Release`. Output goes to
 `build\<Configuration>\Preload\IniOverrides.dll`.
+
+Releases are built by the manually run **Build and Release** workflow (Actions tab). It builds both
+configurations, bumps the minor version from the latest `vX.Y.Z` release (or uses a higher one from
+an optional `version` file), and publishes the two ZIPs plus the bare suffixed DLLs.
 
 `include\` is a copy of the headers from
 [StarRupture-PreLoadPlugin-SDK](https://github.com/AlienXAXS/StarRupture-PreLoadPlugin-SDK).

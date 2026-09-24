@@ -1,0 +1,154 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Generate release tag
+        id: tag
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          function Parse-Semver([string]$v) {
+            if ($v -match '^v?(\d+)\.(\d+)\.(\d+)$') {
+              return @{ Major = [int]$Matches[1]; Minor = [int]$Matches[2]; Patch = [int]$Matches[3] }
+            }
+            return $null
+          }
+
+          function Compare-Semver($a, $b) {
+            if ($a.Major -ne $b.Major) { return $a.Major - $b.Major }
+            if ($a.Minor -ne $b.Minor) { return $a.Minor - $b.Minor }
+            return $a.Patch - $b.Patch
+          }
+
+          function Format-Semver($v) { return "v$($v.Major).$($v.Minor).$($v.Patch)" }
+
+          $latestParsed = $null
+          $releaseTags = gh release list --limit 100 --json tagName |
+            ConvertFrom-Json |
+            Select-Object -ExpandProperty tagName |
+            Where-Object { $_ -match '^v\d+\.\d+\.\d+$' }
+
+          foreach ($t in $releaseTags) {
+            $parsed = Parse-Semver $t
+            if ($parsed -and ($latestParsed -eq $null -or (Compare-Semver $parsed $latestParsed) -gt 0)) {
+              $latestParsed = $parsed
+            }
+          }
+
+          if ($latestParsed -eq $null) {
+            Write-Host "No semver tags found, bootstrapping from v0.0.0"
+            $latestParsed = @{ Major = 0; Minor = 0; Patch = 0 }
+          } else {
+            Write-Host "Latest semver tag: $(Format-Semver $latestParsed)"
+          }
+
+          # Auto-increment minor; a higher version in the optional `version` file wins.
+          $autoParsed = @{ Major = $latestParsed.Major; Minor = $latestParsed.Minor + 1; Patch = 0 }
+
+          $versionFile = Join-Path $env:GITHUB_WORKSPACE "version"
+          $fileParsed  = $null
+          if (Test-Path $versionFile) {
+            $raw = (Get-Content $versionFile -Raw).Trim()
+            $fileParsed = Parse-Semver $raw
+            if ($fileParsed) { Write-Host "version file specifies: $raw" }
+            else { Write-Warning "version file '$raw' is not valid semver, ignoring." }
+          }
+
+          $chosen = $autoParsed
+          if ($fileParsed -and (Compare-Semver $fileParsed $autoParsed) -gt 0) {
+            $chosen = $fileParsed
+            Write-Host "version file is higher, using it."
+          } else {
+            Write-Host "Auto-increment minor wins."
+          }
+
+          $tag = Format-Semver $chosen
+          Write-Host "Tag: $tag"
+          echo "TAG=$tag" >> $env:GITHUB_OUTPUT
+
+      # The preload headers are vendored in include\, so no SDK checkout is needed.
+      - name: Build Client Release
+        run: |
+          msbuild "IniOverrides.sln" `
+            /p:Configuration="Client Release" `
+            /p:Platform=x64 `
+            /m `
+            /v:minimal
+
+      - name: Build Server Release
+        run: |
+          msbuild "IniOverrides.sln" `
+            /p:Configuration="Server Release" `
+            /p:Platform=x64 `
+            /m `
+            /v:minimal
+
+      # ZIP layout: Preload\IniOverrides-<Variant>.dll (+ .pdb), extracted into
+      # <game>\Binaries\Win64\ModLoader\. The -Client / -Server suffix is only
+      # applied here; the loader identifies the plugin by PreloadInfo, not by
+      # file name. No manifest or sidecar: the auto-updater only scans Plugins\.
+      - name: Generate release assets
+        shell: pwsh
+        run: |
+          $tag  = "${{ steps.tag.outputs.TAG }}"
+          $ws   = $env:GITHUB_WORKSPACE
+          $name = "IniOverrides"
+
+          foreach ($variant in @("Client", "Server")) {
+            $varLower = $variant.ToLower()
+            $outName  = "$name-$variant"
+
+            $dllSrc = "$ws\build\$variant Release\Preload\$name.dll"
+            $pdbSrc = [System.IO.Path]::ChangeExtension($dllSrc, ".pdb")
+            if (-not (Test-Path $dllSrc)) { throw "Build output not found: $dllSrc" }
+
+            Copy-Item $dllSrc "$ws\$outName.dll"
+
+            $staging = "$ws\staging-$varLower\Preload"
+            New-Item -ItemType Directory -Force $staging | Out-Null
+            Copy-Item $dllSrc "$staging\$outName.dll"
+            if (Test-Path $pdbSrc) { Copy-Item $pdbSrc "$staging\$outName.pdb" }
+
+            Compress-Archive -Path "$ws\staging-$varLower\*" -DestinationPath "$ws\$outName-$tag.zip"
+            Write-Host "Created $outName-$tag.zip"
+          }
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag  = "${{ steps.tag.outputs.TAG }}"
+          $ws   = $env:GITHUB_WORKSPACE
+          $name = "IniOverrides"
+
+          $assets = @(
+            "$ws\$name-Client.dll",
+            "$ws\$name-Client-$tag.zip",
+            "$ws\$name-Server.dll",
+            "$ws\$name-Server-$tag.zip"
+          )
+
+          Write-Host "Uploading $($assets.Count) asset(s):"
+          $assets | ForEach-Object { Write-Host "  $_" }
+
+          gh release create $tag @assets `
+            --title "IniOverrides Preload Plugin $tag" `
+            --generate-notes
